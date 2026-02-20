@@ -1,22 +1,8 @@
+import asyncio
+from collections import Counter
+from urllib.parse import urlparse
 
-from web_inspector_mcp.browser_session import network_session
-
-
-def _parse_log(log: dict) -> dict | None:
-    """Parse a single network log entry into a clean dict."""
-    params = log.get('params', {})
-    request = params.get('request', {})
-    url = request.get('url')
-    if not url:
-        return None
-    return {
-        'request_id': params.get('requestId'),
-        'url': url,
-        'method': request.get('method', '?'),
-        'type': params.get('type'),
-        'headers': request.get('headers', {}),
-        'has_post_data': request.get('hasPostData', False),
-    }
+from web_inspector_mcp.browser_session import browser_session
 
 
 async def capture_network(url: str, wait: int = 5) -> dict:
@@ -30,33 +16,48 @@ async def capture_network(url: str, wait: int = 5) -> dict:
         url:  The full URL to load and monitor.
         wait: Seconds to wait for network activity after page load (default: 5).
     """
-    async with network_session(url, wait_seconds=wait) as (tab, logs):
+    async with browser_session() as tab:
+        # Use HAR recording to capture all network activity
+        async with tab.request.record() as capture:
+            await tab.go_to(url)
+            await asyncio.sleep(wait)
+
+        # Process captured entries
         requests = []
-        for log in logs:
-            parsed = _parse_log(log)
-            if parsed:
-                requests.append(parsed)
+        type_counts = Counter()
+        domain_counts = Counter()
 
-        # Group by type
-        type_counts = {}
-        for req in requests:
-            t = req['type'] or 'Unknown'
-            type_counts[t] = type_counts.get(t, 0) + 1
+        for entry in capture.entries:
+            req = entry['request']
+            resp = entry['response']
 
-        # Group by domain
-        from urllib.parse import urlparse
-        domain_counts = {}
-        for req in requests:
+            # Extract request info
+            request_info = {
+                'method': req['method'],
+                'url': req['url'],
+                'status': resp['status'],
+                'type': entry.get('_resourceType', 'Other'),
+                'timestamp': entry['startedDateTime'],
+                'size': resp.get('bodySize', 0),
+            }
+            requests.append(request_info)
+
+            # Count by type
+            resource_type = entry.get('_resourceType', 'Other')
+            type_counts[resource_type] += 1
+
+            # Count by domain
             try:
                 domain = urlparse(req['url']).netloc
+                if domain:
+                    domain_counts[domain] += 1
             except Exception:
-                domain = 'unknown'
-            domain_counts[domain] = domain_counts.get(domain, 0) + 1
+                pass
 
         return {
             'page_url': url,
             'total_requests': len(requests),
-            'by_type': type_counts,
-            'by_domain': domain_counts,
+            'by_type': dict(type_counts),
+            'by_domain': dict(domain_counts),
             'requests': requests,
         }

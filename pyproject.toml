@@ -29,6 +29,7 @@ source = ["web_inspector_mcp"]
 branch = true
 
 [tool.coverage.report]
+fail_under = 92
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",

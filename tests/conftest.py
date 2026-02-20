@@ -15,6 +15,12 @@ def mock_tab():
     # Needs to mock the connection handler callback registration
     tab._connection_handler = MagicMock()
     tab._connection_handler.register_callback = AsyncMock()
+
+    # Mocking request.record async context manager
+    tab.request = MagicMock()
+    record_ctx = AsyncMock()
+    record_ctx.__aenter__.return_value = MagicMock(entries=[])
+    tab.request.record.return_value = record_ctx
     return tab
 
 @pytest.fixture
@@ -29,7 +35,4 @@ def mock_chrome(mock_tab, monkeypatch):
 
     mock_chrome_cls = MagicMock(return_value=chrome_instance)
     monkeypatch.setattr("web_inspector_mcp.browser_session.Chrome", mock_chrome_cls)
-    monkeypatch.setattr("web_inspector_mcp.tools.extract_api_schema.Chrome", mock_chrome_cls)
-    monkeypatch.setattr("web_inspector_mcp.tools.intercept_api.Chrome", mock_chrome_cls)
-    monkeypatch.setattr("web_inspector_mcp.tools.measure_performance.Chrome", mock_chrome_cls)
     return chrome_instance

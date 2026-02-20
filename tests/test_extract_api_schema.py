@@ -1,4 +1,5 @@
 import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -19,14 +20,9 @@ def test_infer_type():
     assert _infer_type([]) == 'array<unknown>'
     assert _infer_type({"a": 1}) == 'object'
 
+
 def test_infer_schema():
-    data = {
-        "user": {
-            "id": 1,
-            "name": "Alice",
-            "roles": ["admin", "user"]
-        }
-    }
+    data = {"user": {"id": 1, "name": "Alice", "roles": ["admin", "user"]}}
     schema = _infer_schema(data)
     assert schema['type'] == 'object'
     assert schema['properties']['user']['type'] == 'object'
@@ -34,28 +30,24 @@ def test_infer_schema():
     assert schema['properties']['user']['properties']['roles']['type'] == 'array'
     assert schema['properties']['user']['properties']['roles']['items']['type'] == 'string'
 
+
 @pytest.mark.asyncio
 async def test_extract_api_schema(mock_chrome, mock_tab):
     response_data = {"id": 1, "name": "Test"}
-    mock_tab.get_network_response_body.return_value = json.dumps(response_data)
 
-    import asyncio
-    original_sleep = asyncio.sleep
+    mock_capture = MagicMock()
+    mock_capture.entries = [
+        {
+            'request': {'url': 'http://example.com/api/users', 'method': 'GET'},
+            'response': {'content': {'text': json.dumps(response_data)}},
+        }
+    ]
 
-    async def fake_sleep(wait):
-        callback = mock_tab._connection_handler.register_callback.call_args[0][1]
-        await callback({
-            'params': {
-                'requestId': '123',
-                'request': {'url': 'http://example.com/api/users', 'method': 'GET'}
-            }
-        })
+    mock_record_ctx = AsyncMock()
+    mock_record_ctx.__aenter__.return_value = mock_capture
+    mock_tab.request.record.return_value = mock_record_ctx
 
-    try:
-        asyncio.sleep = fake_sleep
-        res = await extract_api_schema("http://example.com", "*api*", wait=0)
-    finally:
-        asyncio.sleep = original_sleep
+    res = await extract_api_schema("http://example.com", "*api*", wait=0)
 
     assert res['apis_found'] == 1
     assert len(res['schemas']) == 1
@@ -66,26 +58,20 @@ async def test_extract_api_schema(mock_chrome, mock_tab):
     assert schema['response_schema']['type'] == 'object'
     assert set(schema['sample_keys']) == {'id', 'name'}
 
+
 @pytest.mark.asyncio
 async def test_extract_api_schema_invalid_json(mock_chrome, mock_tab):
-    mock_tab.get_network_response_body.return_value = "<html>Not JSON</html>"
+    mock_capture = MagicMock()
+    mock_capture.entries = [
+        {
+            'request': {'url': 'http://example.com/api', 'method': 'GET'},
+            'response': {'content': {'text': '<html>Not JSON</html>'}},
+        }
+    ]
+    mock_record_ctx = AsyncMock()
+    mock_record_ctx.__aenter__.return_value = mock_capture
+    mock_tab.request.record.return_value = mock_record_ctx
 
-    import asyncio
-    original_sleep = asyncio.sleep
-
-    async def fake_sleep(wait):
-        callback = mock_tab._connection_handler.register_callback.call_args[0][1]
-        await callback({
-            'params': {
-                'requestId': '123',
-                'request': {'url': 'http://example.com/api', 'method': 'GET'}
-            }
-        })
-
-    try:
-        asyncio.sleep = fake_sleep
-        res = await extract_api_schema("http://example.com", "*api*", wait=0)
-    finally:
-        asyncio.sleep = original_sleep
+    res = await extract_api_schema("http://example.com", "*api*", wait=0)
 
     assert res['apis_found'] == 0

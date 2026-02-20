@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from web_inspector_mcp.tools.discover_endpoints import discover_endpoints
@@ -5,43 +7,33 @@ from web_inspector_mcp.tools.discover_endpoints import discover_endpoints
 
 @pytest.mark.asyncio
 async def test_discover_endpoints(mock_chrome, mock_tab):
-    mock_tab.get_network_logs.return_value = [
+    mock_capture = MagicMock()
+    mock_capture.entries = [
         {
-            'params': {
-                'requestId': '1',
-                'type': 'Fetch',
-                'request': {'url': 'http://api.domain.com/v1/users', 'method': 'GET'}
-            }
+            'request': {'url': 'http://api.domain.com/v1/users', 'method': 'GET'},
+            '_resourceType': 'Fetch',
         },
         {
-            'params': {
-                'requestId': '2',
-                'type': 'Image', # Static type, will be ignored
-                'request': {'url': 'http://img.domain.com/pic.png', 'method': 'GET'}
-            }
+            'request': {'url': 'http://img.domain.com/pic.png', 'method': 'GET'},
+            '_resourceType': 'Image', # Static type, will be ignored
         },
         {
-            'params': {
-                'requestId': '3',
-                'type': 'Document', # Document type, will be ignored
-                'request': {'url': 'http://example.com/', 'method': 'GET'}
-            }
+            'request': {'url': 'http://example.com/', 'method': 'GET'},
+            '_resourceType': 'Document', # Document type, will be ignored
         },
         {
-            'params': {
-                'requestId': '4',
-                'type': 'XHR',
-                'request': {'url': 'http://api.domain.com/v1/users', 'method': 'GET'} # Duplicate to count up
-            }
+            'request': {'url': 'http://api.domain.com/v1/users', 'method': 'GET'},
+            '_resourceType': 'XHR',
         },
         {
-            'params': {
-                'requestId': '5',
-                'type': 'XHR',
-                'request': {'url': 'invalid-url', 'method': 'POST'} # Will be kept despite parsing err
-            }
+            'request': {'url': 'invalid-url', 'method': 'POST'},
+            '_resourceType': 'XHR',
         }
     ]
+
+    mock_record_ctx = AsyncMock()
+    mock_record_ctx.__aenter__.return_value = mock_capture
+    mock_tab.request.record.return_value = mock_record_ctx
 
     res = await discover_endpoints("http://example.com", wait=0)
     assert res['page_url'] == "http://example.com"

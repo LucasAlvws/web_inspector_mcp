@@ -1,7 +1,7 @@
 import json
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydoll.protocol.network.events import NetworkEvent
 
 from web_inspector_mcp.tools.measure_performance import measure_performance
 
@@ -17,51 +17,39 @@ async def test_measure_performance(mock_chrome, mock_tab):
         }
     }
 
-    import asyncio
-    original_sleep = asyncio.sleep
+    mock_capture = MagicMock()
+    mock_capture.entries = [
+        {
+            'request': {
+                'url': 'http://example.com/api',
+                'method': 'GET'
+            },
+            '_resourceType': 'Fetch',
+            'response': {
+                'status': 200,
+                'bodySize': 1000
+            },
+            'time': 1000.0
+        },
+        {
+            'request': {
+                'url': 'http://example.com/img',
+                'method': 'GET'
+            },
+            '_resourceType': 'Image',
+            'response': {
+                'status': 200,
+                'bodySize': 0
+            },
+            'time': 0
+        }
+    ]
 
-    async def fake_sleep(wait):
-        callbacks = {}
-        for callArgs in mock_tab._connection_handler.register_callback.call_args_list:
-            callbacks[callArgs[0][0]] = callArgs[0][1]
+    mock_record_ctx = AsyncMock()
+    mock_record_ctx.__aenter__.return_value = mock_capture
+    mock_tab.request.record.return_value = mock_record_ctx
 
-        on_request = callbacks.get(NetworkEvent.REQUEST_WILL_BE_SENT)
-        on_response = callbacks.get(NetworkEvent.RESPONSE_RECEIVED)
-        on_finished = callbacks.get(NetworkEvent.LOADING_FINISHED)
-
-        await on_request({
-            'params': {
-                'requestId': '1',
-                'timestamp': 1000.0,
-                'request': {'url': 'http://example.com/api', 'method': 'GET'},
-                'type': 'Fetch'
-            }
-        })
-
-        await on_response({
-            'params': {
-                'requestId': '1',
-                'timestamp': 1000.5,
-                'response': {'status': 200, 'mimeType': 'application/json', 'encodedDataLength': 500}
-            }
-        })
-
-        await on_finished({
-            'params': {
-                'requestId': '1',
-                'timestamp': 1001.0,
-                'encodedDataLength': 1000
-            }
-        })
-
-        await on_request({'params': {'requestId': '2', 'timestamp': 1.0}})
-        await on_response({'params': {'requestId': '2'}})
-
-    try:
-        asyncio.sleep = fake_sleep
-        res = await measure_performance("http://example.com", wait=0)
-    finally:
-        asyncio.sleep = original_sleep
+    res = await measure_performance("http://example.com", wait=0)
 
     assert res['page_url'] == "http://example.com"
     assert res['total_requests'] == 2

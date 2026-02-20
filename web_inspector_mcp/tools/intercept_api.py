@@ -2,10 +2,7 @@ import asyncio
 import fnmatch
 import json
 
-from pydoll.browser.chromium import Chrome
-from pydoll.protocol.network.events import NetworkEvent
-
-from web_inspector_mcp.browser_session import _default_options
+from web_inspector_mcp.browser_session import browser_session
 
 
 async def intercept_api(url: str, pattern: str = '*api*', wait: int = 5) -> dict:
@@ -19,49 +16,46 @@ async def intercept_api(url: str, pattern: str = '*api*', wait: int = 5) -> dict
                  Examples: '*api*', '*.json', '*graphql*', '*v1/*'
         wait:    Seconds to wait for network activity (default: 5).
     """
-    matched_requests = {}
-
-    async def on_request(event):
-        params = event.get('params', {})
-        request = params.get('request', {})
-        req_url = request.get('url', '')
-        rid = params.get('requestId')
-        if rid and fnmatch.fnmatch(req_url.lower(), pattern.lower()):
-            matched_requests[rid] = {
-                'url': req_url,
-                'method': request.get('method', '?'),
-                'type': params.get('type'),
-                'headers': request.get('headers', {}),
-            }
-
-    async with Chrome(options=_default_options()) as browser:
-        tab = await browser.start()
-        await tab.enable_network_events()
-
-        await tab._connection_handler.register_callback(
-            NetworkEvent.REQUEST_WILL_BE_SENT, on_request
-        )
-
-        await tab.go_to(url)
-        await asyncio.sleep(wait)
+    async with browser_session() as tab:
+        async with tab.request.record() as capture:
+            await tab.go_to(url)
+            await asyncio.sleep(wait)
 
         # Try to get response bodies for matched requests
         results = []
-        for rid, req_info in matched_requests.items():
+        for entry in capture.entries:
+            req = entry['request']
+            resp = entry['response']
+            req_url = req['url']
+
+            if not fnmatch.fnmatch(req_url.lower(), pattern.lower()):
+                continue
+
+            body_raw = resp.get('content', {}).get('text')
+
+            req_info = {
+                'url': req_url,
+                'method': req.get('method', '?'),
+                'type': entry.get('_resourceType'),
+                'headers': req.get('headers', {}),
+            }
+
             try:
-                body_raw = await tab.get_network_response_body(rid)
-                body = body_raw if isinstance(body_raw, str) else str(body_raw)
+                # If body_raw is None, we just set body to empty string for parsing check,
+                # but keep track that it's actually missing
+                body = body_raw if isinstance(body_raw, str) else str(body_raw) if body_raw is not None else ""
 
                 # Try to parse as JSON
                 parsed = None
-                try:
-                    parsed = json.loads(body)
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                if body_raw is not None:
+                    try:
+                        parsed = json.loads(body)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
 
                 results.append({
                     **req_info,
-                    'response_body': parsed if parsed else body[:2000],
+                    'response_body': parsed if parsed else (body[:2000] if body_raw is not None else None),
                     'is_json': parsed is not None,
                 })
             except Exception as e:

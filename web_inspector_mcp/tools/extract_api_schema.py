@@ -2,10 +2,7 @@ import asyncio
 import json
 from urllib.parse import urlparse
 
-from pydoll.browser.chromium import Chrome
-from pydoll.protocol.network.events import NetworkEvent
-
-from web_inspector_mcp.browser_session import _default_options
+from web_inspector_mcp.browser_session import browser_session
 
 
 def _infer_type(value) -> str:
@@ -61,49 +58,40 @@ async def extract_api_schema(url: str, pattern: str = '*api*', wait: int = 5) ->
     """
     import fnmatch
 
-    matched_requests = {}
-
-    async def on_request(event):
-        params = event.get('params', {})
-        request = params.get('request', {})
-        req_url = request.get('url', '')
-        rid = params.get('requestId')
-        if rid and fnmatch.fnmatch(req_url.lower(), pattern.lower()):
-            matched_requests[rid] = {
-                'url': req_url,
-                'method': request.get('method', '?'),
-            }
-
-    async with Chrome(options=_default_options()) as browser:
-        tab = await browser.start()
-        await tab.enable_network_events()
-
-        await tab._connection_handler.register_callback(
-            NetworkEvent.REQUEST_WILL_BE_SENT, on_request
-        )
-
-        await tab.go_to(url)
-        await asyncio.sleep(wait)
+    async with browser_session() as tab:
+        async with tab.request.record() as capture:
+            await tab.go_to(url)
+            await asyncio.sleep(wait)
 
         schemas = []
-        for rid, req_info in matched_requests.items():
+        for entry in capture.entries:
+            req = entry['request']
+            resp = entry['response']
+            req_url = req['url']
+
+            if not fnmatch.fnmatch(req_url.lower(), pattern.lower()):
+                continue
+
+            body_raw = resp.get('content', {}).get('text')
+            if not body_raw:
+                continue
+
             try:
-                body_raw = await tab.get_network_response_body(rid)
                 body = body_raw if isinstance(body_raw, str) else str(body_raw)
 
                 parsed = json.loads(body)
                 schema = _infer_schema(parsed)
 
                 try:
-                    parsed_url = urlparse(req_info['url'])
+                    parsed_url = urlparse(req_url)
                     endpoint = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
                 except Exception:
-                    endpoint = req_info['url']
+                    endpoint = req_url
 
                 schemas.append({
                     'endpoint': endpoint,
-                    'method': req_info['method'],
-                    'full_url': req_info['url'],
+                    'method': req['method'],
+                    'full_url': req_url,
                     'response_schema': schema,
                     'sample_keys': list(parsed.keys()) if isinstance(parsed, dict) else None,
                 })

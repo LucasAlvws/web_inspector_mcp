@@ -4,7 +4,6 @@ from web_inspector_mcp.browser_session import (
     _default_options,
     browser_session,
     extract_result,
-    network_session,
     run_js,
 )
 
@@ -37,17 +36,11 @@ def test_extract_result_non_dict():
 
 @pytest.mark.asyncio
 async def test_browser_session(mock_chrome, mock_tab):
-    async with browser_session("http://example.com") as tab:
+    async with browser_session() as tab:
         assert tab == mock_tab
-        tab.go_to.assert_awaited_once_with("http://example.com")
+        mock_tab.go_to.assert_not_called()
 
-@pytest.mark.asyncio
-async def test_network_session(mock_chrome, mock_tab):
-    async with network_session("http://example.com", wait_seconds=0) as (tab, logs):
-        assert tab == mock_tab
-        assert logs == []
-        tab.enable_network_events.assert_awaited_once()
-        tab.go_to.assert_awaited_once_with("http://example.com")
+
 
 @pytest.mark.asyncio
 async def test_run_js(mock_chrome, mock_tab):

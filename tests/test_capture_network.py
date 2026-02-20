@@ -1,64 +1,58 @@
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
-from web_inspector_mcp.tools.capture_network import _parse_log, capture_network
+from web_inspector_mcp.tools.capture_network import capture_network
 
-
-def test_parse_log_valid():
-    log = {
-        'params': {
-            'requestId': '123',
-            'type': 'Fetch',
-            'request': {
-                'url': 'http://example.com/api',
-                'method': 'GET',
-                'headers': {'Accept': '*/*'},
-                'hasPostData': False
-            }
-        }
-    }
-    parsed = _parse_log(log)
-    assert parsed == {
-        'request_id': '123',
-        'url': 'http://example.com/api',
-        'method': 'GET',
-        'type': 'Fetch',
-        'headers': {'Accept': '*/*'},
-        'has_post_data': False
-    }
-
-def test_parse_log_no_url():
-    log = {'params': {'request': {}}}
-    assert _parse_log(log) is None
 
 @pytest.mark.asyncio
 async def test_capture_network(mock_chrome, mock_tab):
-    mock_tab.get_network_logs.return_value = [
+    mock_capture = MagicMock()
+    mock_capture.entries = [
         {
-            'params': {
-                'requestId': '1',
-                'type': 'Fetch',
-                'request': {'url': 'http://api.domain.com/data'}
-            }
+            'request': {
+                'method': 'GET',
+                'url': 'http://api.domain.com/data'
+            },
+            'response': {
+                'status': 200,
+                'bodySize': 1024
+            },
+            '_resourceType': 'Fetch',
+            'startedDateTime': '2023-01-01T00:00:00Z'
         },
         {
-            'params': {
-                'requestId': '2',
-                'type': 'Image',
-                'request': {'url': 'http://img.domain.com/pic.png'}
-            }
+            'request': {
+                'method': 'GET',
+                'url': 'http://img.domain.com/pic.png'
+            },
+            'response': {
+                'status': 200,
+                'bodySize': 2048
+            },
+            '_resourceType': 'Image',
+            'startedDateTime': '2023-01-01T00:00:01Z'
         },
         {
-            'params': {
-                'requestId': '3',
-                'type': None,
-                'request': {'url': 'invalid-url'} # Will cause exception in urlparse but handled
-            }
+            'request': {
+                'method': 'GET',
+                'url': 'invalid-url'
+            },
+            'response': {
+                'status': 404,
+                'bodySize': 0
+            },
+            'startedDateTime': '2023-01-01T00:00:02Z'
         }
     ]
+
+    mock_record_ctx = AsyncMock()
+    mock_record_ctx.__aenter__.return_value = mock_capture
+    mock_tab.request.record.return_value = mock_record_ctx
 
     res = await capture_network("http://example.com", wait=0)
     assert res['page_url'] == "http://example.com"
     assert res['total_requests'] == 3
-    assert res['by_type'] == {'Fetch': 1, 'Image': 1, 'Unknown': 1}
-    assert res['by_domain'] == {'api.domain.com': 1, 'img.domain.com': 1, '': 1}
+    assert res['by_type'] == {'Fetch': 1, 'Image': 1, 'Other': 1}
+    assert res['by_domain'] == {'api.domain.com': 1, 'img.domain.com': 1}
     assert len(res['requests']) == 3

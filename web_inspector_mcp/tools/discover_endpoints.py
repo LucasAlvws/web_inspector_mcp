@@ -1,6 +1,7 @@
+import asyncio
 from urllib.parse import urlparse
 
-from web_inspector_mcp.browser_session import network_session
+from web_inspector_mcp.browser_session import browser_session
 
 
 async def discover_endpoints(url: str, wait: int = 5) -> dict:
@@ -16,15 +17,18 @@ async def discover_endpoints(url: str, wait: int = 5) -> dict:
     """
     STATIC_TYPES = {'Image', 'Stylesheet', 'Font', 'Script', 'Media', 'Manifest'}
 
-    async with network_session(url, wait_seconds=wait) as (tab, logs):
+    async with browser_session() as tab:
+        async with tab.request.record() as capture:
+            await tab.go_to(url)
+            await asyncio.sleep(wait)
+
         endpoints = {}
 
-        for log in logs:
-            params = log.get('params', {})
-            request = params.get('request', {})
-            req_url = request.get('url', '')
-            resource_type = params.get('type', '')
-            method = request.get('method', '?')
+        for entry in capture.entries:
+            req = entry['request']
+            req_url = req['url']
+            resource_type = entry.get('_resourceType', '')
+            method = req['method']
 
             if not req_url or resource_type in STATIC_TYPES:
                 continue
@@ -51,7 +55,7 @@ async def discover_endpoints(url: str, wait: int = 5) -> dict:
                     'domain': parsed.netloc if parsed else '?',
                     'count': 0,
                     'has_query_params': bool(parsed.query) if parsed else False,
-                    'has_post_data': request.get('hasPostData', False),
+                    'has_post_data': 'postData' in req,
                 }
             endpoints[key]['count'] += 1
 

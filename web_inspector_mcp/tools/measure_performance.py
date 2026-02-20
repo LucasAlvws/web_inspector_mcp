@@ -1,10 +1,7 @@
 import asyncio
 from urllib.parse import urlparse
 
-from pydoll.browser.chromium import Chrome
-from pydoll.protocol.network.events import NetworkEvent
-
-from web_inspector_mcp.browser_session import _default_options, extract_result
+from web_inspector_mcp.browser_session import browser_session, extract_result
 
 
 async def measure_performance(url: str, wait: int = 5) -> dict:
@@ -18,53 +15,10 @@ async def measure_performance(url: str, wait: int = 5) -> dict:
         url:  The page to load and measure.
         wait: Seconds to wait for network activity (default: 5).
     """
-    requests = {}
-    responses = {}
-    loading_finished = {}
-
-    async def on_request(event):
-        params = event.get('params', {})
-        rid = params.get('requestId')
-        if rid:
-            request = params.get('request', {})
-            requests[rid] = {
-                'url': request.get('url', ''),
-                'method': request.get('method', '?'),
-                'type': params.get('type', '?'),
-                'timestamp': params.get('timestamp', 0),
-            }
-
-    async def on_response(event):
-        params = event.get('params', {})
-        rid = params.get('requestId')
-        if rid:
-            response = params.get('response', {})
-            responses[rid] = {
-                'status': response.get('status', 0),
-                'mime_type': response.get('mimeType', ''),
-                'encoded_data_length': response.get('encodedDataLength', 0),
-                'timestamp': params.get('timestamp', 0),
-            }
-
-    async def on_finished(event):
-        params = event.get('params', {})
-        rid = params.get('requestId')
-        if rid:
-            loading_finished[rid] = {
-                'encoded_data_length': params.get('encodedDataLength', 0),
-                'timestamp': params.get('timestamp', 0),
-            }
-
-    async with Chrome(options=_default_options()) as browser:
-        tab = await browser.start()
-        await tab.enable_network_events()
-
-        await tab._connection_handler.register_callback(NetworkEvent.REQUEST_WILL_BE_SENT, on_request)
-        await tab._connection_handler.register_callback(NetworkEvent.RESPONSE_RECEIVED, on_response)
-        await tab._connection_handler.register_callback(NetworkEvent.LOADING_FINISHED, on_finished)
-
-        await tab.go_to(url)
-        await asyncio.sleep(wait)
+    async with browser_session() as tab:
+        async with tab.request.record() as capture:
+            await tab.go_to(url)
+            await asyncio.sleep(wait)
 
         # Also get Navigation Timing from the browser
         timing_raw = await tab.execute_script("""
@@ -87,23 +41,27 @@ async def measure_performance(url: str, wait: int = 5) -> dict:
     # Compute metrics
     resources = []
     total_bytes = 0
-    for rid, req in requests.items():
-        resp = responses.get(rid, {})
-        fin = loading_finished.get(rid, {})
-        size = fin.get('encoded_data_length', resp.get('encoded_data_length', 0))
+    for entry in capture.entries:
+        req = entry['request']
+        resp = entry['response']
+
+        size = resp.get('bodySize', 0)
+        if size < 0:
+            size = resp.get('_transferSize', 0)
+        if size < 0:
+            size = 0
+
         total_bytes += size
 
-        duration_ms = 0
-        if req['timestamp'] and fin.get('timestamp'):
-            duration_ms = round((fin['timestamp'] - req['timestamp']) * 1000, 1)
+        duration_ms = entry.get('time', 0)
 
         resources.append({
             'url': req['url'][:120],
             'method': req['method'],
-            'type': req['type'],
+            'type': entry.get('_resourceType', '?'),
             'status': resp.get('status', '?'),
             'size_bytes': size,
-            'duration_ms': duration_ms,
+            'duration_ms': round(duration_ms, 1),
         })
 
     resources.sort(key=lambda r: r['duration_ms'], reverse=True)
